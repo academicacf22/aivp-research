@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #1a5f7a;
+  --color-secondary: #57c5b6;
+  --color-tertiary: #159895;
+  --color-background: #f2f2f2;
+  --color-text: #333333;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+.btn {
+  @apply px-4 py-2 rounded-lg transition-all duration-200;
+}
+
+.btn-primary {
+  @apply bg-primary text-white hover:bg-secondary;
+}
+
+.btn-secondary {
+  @apply bg-secondary text-white hover:bg-primary;
+}
+
+.form-input {
+  @apply w-full p-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-primary;
+}
+
+.chat-message {
+  @apply p-4 rounded-lg mb-4 max-w-[80%];
+}
+
+.user-message {
+  @apply bg-primary text-white ml-auto;
+}
+
+.ai-message {
+  @apply bg-gray-100 mr-auto;
+}
+
+/* Animation classes */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+  
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

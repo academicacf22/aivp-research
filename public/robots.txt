@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /
+
+# Disallow all robots from crawling CLERKtheAI platform
