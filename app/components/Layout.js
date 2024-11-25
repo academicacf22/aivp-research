@@ -27,88 +27,117 @@ export default function Layout({ children }) {
   ];
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="bg-white shadow">
+      <header className="bg-white shadow-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            {/* Logo and Title */}
-            <div className="flex items-center">
-              <Link href="/dashboard">
-                <Image
-                  src="/university-logo.png"
-                  alt="University Logo"
-                  width={150}
-                  height={40}
-                  className="h-10 w-auto"
-                />
-              </Link>
+          {/* Main Header Content */}
+          <div className="py-6">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              {/* Title and Navigation Section */}
+              <div className="flex-1 text-center sm:text-left">
+                {!user ? (
+                  <div>
+                    <h1 className="text-3xl sm:text-4xl font-bold text-primary font-serif tracking-wide mb-2">
+                      CLERK<span className="text-secondary">the</span>AI
+                    </h1>
+                    <p className="text-sm sm:text-base text-gray-600 max-w-md">
+                      Case-based Learning to Enhance Reasoning at Keele using AI
+                    </p>
+                  </div>
+                ) : (
+                  <Link href="/dashboard">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-primary font-serif tracking-wide">
+                      CLERK<span className="text-secondary">the</span>AI
+                    </h1>
+                  </Link>
+                )}
+              </div>
+
+              {/* Desktop Navigation */}
+              <nav className="hidden sm:block">
+                <div className="flex items-center gap-4">
+                  {user ? (
+                    <>
+                      {navLinks.map((link) => (
+                        <Link
+                          key={link.href}
+                          href={link.href}
+                          className="text-gray-600 hover:text-primary transition-colors"
+                        >
+                          {link.label}
+                        </Link>
+                      ))}
+                      <button
+                        onClick={handleLogout}
+                        className="flex items-center text-gray-600 hover:text-primary transition-colors"
+                      >
+                        <LogOut className="h-5 w-5 mr-1" />
+                        <span>Logout</span>
+                      </button>
+                    </>
+                  ) : (
+                    <Link
+                      href="/login"
+                      className="px-6 py-2 bg-primary text-white hover:bg-secondary rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+                    >
+                      Login
+                    </Link>
+                  )}
+                </div>
+              </nav>
+
+              {/* Mobile Menu Button */}
+              <button
+                className="sm:hidden p-2 text-gray-600 hover:text-primary"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                aria-label="Toggle menu"
+              >
+                {isMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              </button>
             </div>
-
-            {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center space-x-4">
-              {user && navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="text-gray-600 hover:text-primary transition-colors"
-                >
-                  {link.label}
-                </Link>
-              ))}
-              {user && (
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center text-gray-600 hover:text-primary transition-colors"
-                >
-                  <LogOut className="h-5 w-5 mr-1" />
-                  Logout
-                </button>
-              )}
-            </nav>
-
-            {/* Mobile menu button */}
-            <button
-              className="md:hidden p-2 rounded-md text-gray-600 hover:text-primary"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-            >
-              {isMenuOpen ? (
-                <X className="h-6 w-6" />
-              ) : (
-                <Menu className="h-6 w-6" />
-              )}
-            </button>
           </div>
+
+          {/* Mobile Navigation Menu */}
+          {isMenuOpen && (
+            <div className="sm:hidden border-t border-gray-200">
+              <div className="py-2 space-y-2">
+                {user ? (
+                  <>
+                    {navLinks.map((link) => (
+                      <Link
+                        key={link.href}
+                        href={link.href}
+                        className="block px-4 py-2 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors"
+                        onClick={() => setIsMenuOpen(false)}
+                      >
+                        {link.label}
+                      </Link>
+                    ))}
+                    <button
+                      onClick={() => {
+                        handleLogout();
+                        setIsMenuOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors flex items-center"
+                    >
+                      <LogOut className="h-5 w-5 mr-2" />
+                      Logout
+                    </button>
+                  </>
+                ) : (
+                  <Link
+                    href="/login"
+                    className="block mx-4 py-2 text-center bg-primary text-white hover:bg-secondary rounded-lg transition-colors"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Login
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-
-        {/* Mobile Navigation */}
-        {isMenuOpen && (
-          <div className="md:hidden border-t">
-            <div className="px-2 pt-2 pb-3 space-y-1">
-              {user && navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="block px-3 py-2 text-gray-600 hover:text-primary transition-colors"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  {link.label}
-                </Link>
-              ))}
-              {user && (
-                <button
-                  onClick={() => {
-                    handleLogout();
-                    setIsMenuOpen(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-gray-600 hover:text-primary transition-colors"
-                >
-                  Logout
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </header>
 
       {/* Main Content */}
@@ -117,11 +146,27 @@ export default function Layout({ children }) {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white shadow mt-8">
-        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
-          <p className="text-center text-gray-500 text-sm">
-            © {new Date().getFullYear()} CLERKtheAI.
-          </p>
+      <footer className="bg-white shadow-md mt-8">
+        <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col items-center space-y-4">
+            {/* Keele Logo */}
+            <Link href="https://www.keele.ac.uk" target="_blank" rel="noopener noreferrer">
+              <div className="w-[180px] h-[48px] relative">
+                <Image
+                  src="/university-logo.png"
+                  alt="Keele University Logo"
+                  fill
+                  style={{ objectFit: 'contain' }}
+                  priority
+                />
+              </div>
+            </Link>
+            
+            {/* Copyright */}
+            <p className="text-center text-gray-500 text-sm">
+              © {new Date().getFullYear()} CLERKtheAI - Keele University School of Medicine
+            </p>
+          </div>
         </div>
       </footer>
     </div>
