@@ -11,7 +11,8 @@ import {
     signInWithEmailAndPassword,
     signOut,
     onAuthStateChanged,
-    sendPasswordResetEmail
+    sendPasswordResetEmail,
+    sendEmailVerification
 } from 'firebase/auth';
 import { 
     doc, 
@@ -53,48 +54,59 @@ export function AuthProvider({ children }) {
     };
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-          if (user) {
-            try {
-              const userDoc = await getDoc(doc(db, 'users', user.uid));
-              const userData = userDoc.data();
-              
-              setUser({
-                ...user,
-                role: userData?.role || UserType.PILOT_PARTICIPANT,
-                hasConsented: userData?.hasConsented || false,
-                consentDetails: userData?.consents || null,
-                lastActive: userData?.lastActive || null,
-                metadata: userData?.metadata || {},
-                anonymousId: userData?.anonymousId || null  // Explicitly include anonymousId
-              });
-      
-              // Update last active timestamp
-              await updateDoc(doc(db, 'users', user.uid), {
-                lastActive: serverTimestamp()
-              });
-            } catch (error) {
-              console.error('Error fetching user data:', error);
-              setError(error.message);
-            }
-          } else {
-            setUser(null);
-          }
-          setLoading(false);
-        });
-      
-        return () => unsubscribe();
-      }, []);
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+            if (firebaseUser) {
+                try {
+                    const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+                    const userData = userDoc.data();
 
-    // Signup function
+                    // Allow access if user is verified OR is an admin
+                    if (firebaseUser.emailVerified || userData?.role === UserType.ADMIN) {
+                        setUser({
+                            ...firebaseUser,
+                            role: userData?.role || UserType.PILOT_PARTICIPANT,
+                            hasConsented: userData?.hasConsented || false,
+                            consentDetails: userData?.consents || null,
+                            lastActive: userData?.lastActive || null,
+                            metadata: userData?.metadata || {},
+                            anonymousId: userData?.anonymousId || null
+                        });
+
+                        await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                            lastActive: serverTimestamp()
+                        });
+                    } else {
+                        setUser(null);
+                        throw { code: 'auth/unverified-email' };
+                    }
+                } catch (error) {
+                    console.error('Error fetching user data:', error);
+                    setError(error.message);
+                    if (error.code === 'auth/unverified-email') {
+                        await signOut(auth);
+                    }
+                }
+            } else {
+                setUser(null);
+            }
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    // Signup function with email verification
     const signup = async (email, password) => {
         try {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            const user = userCredential.user;
+            const firebaseUser = userCredential.user;
+            
+            // Send verification email
+            await sendEmailVerification(firebaseUser);
             
             // Create initial user document
-            await setDoc(doc(db, 'users', user.uid), {
-                email: user.email,
+            await setDoc(doc(db, 'users', firebaseUser.uid), {
+                email: firebaseUser.email,
                 role: UserType.PILOT_PARTICIPANT,
                 hasConsented: false,
                 createdAt: serverTimestamp(),
@@ -105,26 +117,38 @@ export function AuthProvider({ children }) {
                 }
             });
 
-            return user;
+            // Sign out immediately after signup so user must verify email
+            await signOut(auth);
+            return userCredential;
         } catch (error) {
             setError(error.message);
             throw error;
         }
     };
 
-    // Login function
+    // Login function with verification check
     const login = async (email, password) => {
         try {
             const userCredential = await signInWithEmailAndPassword(auth, email, password);
-            const user = userCredential.user;
+            const firebaseUser = userCredential.user;
 
-            // Update last login
-            await updateDoc(doc(db, 'users', user.uid), {
+            // Check if user is admin first
+            const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+            const userData = userDoc.data();
+
+            // If not admin, verify email
+            if (userData?.role !== UserType.ADMIN && !firebaseUser.emailVerified) {
+                await signOut(auth);
+                throw { code: 'auth/unverified-email' };
+            }
+
+            // Update last login timestamp
+            await updateDoc(doc(db, 'users', firebaseUser.uid), {
                 lastActive: serverTimestamp(),
                 'metadata.lastLogin': new Date().toISOString()
             });
 
-            return user;
+            return userCredential;
         } catch (error) {
             setError(error.message);
             throw error;
@@ -135,7 +159,6 @@ export function AuthProvider({ children }) {
     const logout = async () => {
         try {
             if (user) {
-                // Update last active timestamp before logout
                 await updateDoc(doc(db, 'users', user.uid), {
                     lastActive: serverTimestamp()
                 });
@@ -178,7 +201,7 @@ export function AuthProvider({ children }) {
           await updateDoc(doc(db, 'users', user.uid), {
             role: UserType.RESEARCH_PARTICIPANT,
             hasConsented: true,
-            anonymousId: anonymousId,  // Make sure this is being set
+            anonymousId: anonymousId,
             consents: consentDetails,
             consentTimestamp: serverTimestamp(),
             lastUpdated: serverTimestamp()
@@ -189,13 +212,13 @@ export function AuthProvider({ children }) {
             role: UserType.RESEARCH_PARTICIPANT,
             hasConsented: true,
             consentDetails,
-            anonymousId: anonymousId  // Update the user state with new anonymousId
+            anonymousId: anonymousId
           }));
         } catch (error) {
           setError(error.message);
           throw error;
         }
-      };
+    };
 
     const updateProfileCompletion = async (status) => {
         if (!user) return;
@@ -214,9 +237,9 @@ export function AuthProvider({ children }) {
           setError(error.message);
           throw error;
         }
-      };
+    };
 
-      const value = {
+    const value = {
         user,
         loading,
         error,
@@ -226,10 +249,10 @@ export function AuthProvider({ children }) {
         resetPassword,
         updateUserRole,
         updateConsent,
-        updateProfileCompletion, // Add this line
+        updateProfileCompletion,
         isAdmin,
         isResearchParticipant
-      };
+    };
 
     return (
         <AuthContext.Provider value={value}>
