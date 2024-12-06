@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { LogOut, Menu, X } from 'lucide-react';
 import { useState } from 'react';
+import CookieBanner from './policy/CookieBanner';
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -161,6 +162,16 @@ export default function Layout({ children }) {
                 />
               </div>
             </Link>
+
+            {/* Footer Links */}
+            <div className="flex items-center space-x-4">
+              <Link 
+                href="/privacy" 
+                className="text-sm text-gray-500 hover:text-primary transition-colors"
+              >
+                Privacy Policy
+              </Link>
+            </div>
             
             {/* Copyright */}
             <p className="text-center text-gray-500 text-sm">
@@ -168,6 +179,9 @@ export default function Layout({ children }) {
             </p>
           </div>
         </div>
+
+        {/* Cookie Banner */}
+        <CookieBanner />
       </footer>
     </div>
   );
