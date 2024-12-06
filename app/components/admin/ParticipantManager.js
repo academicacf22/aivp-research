@@ -1,10 +1,9 @@
-// components/admin/ParticipantManager.js
 'use client';
 
 import { useState, useEffect } from 'react';
 import { db } from '@/app/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { Search, Filter, Download, Mail } from 'lucide-react';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { Search, Filter, Download, Mail, Clock, Calculator } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -13,29 +12,104 @@ export default function ParticipantManager() {
   const [participants, setParticipants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filter, setFilter] = useState('all'); // all, research, pilot
+  const [filter, setFilter] = useState('all');
   const [sortBy, setSortBy] = useState('joinDate');
   const [sortOrder, setSortOrder] = useState('desc');
 
   useEffect(() => {
-    fetchParticipants();
+    fetchParticipantsWithStats();
   }, []);
 
-  const fetchParticipants = async () => {
+  const fetchParticipantsWithStats = async () => {
     try {
-      const snapshot = await getDocs(collection(db, 'users'));
-      const participantData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        joinDate: doc.data().createdAt?.toDate?.() || new Date() // Safely handle timestamp conversion
-      }));
-      setParticipants(participantData);
+      // First fetch all users
+      const userSnapshot = await getDocs(collection(db, 'users'));
+      const participantData = userSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          joinDate: data.createdAt?.toDate?.() || new Date()
+        };
+      });
+
+      // Process each participant's sessions
+      const enrichedParticipants = await Promise.all(
+        participantData.map(async (participant) => {
+          try {
+            const sessionsRef = collection(db, 'sessions');
+            const sessionsQuery = query(
+              sessionsRef,
+              where('userId', '==', participant.id),
+              where('status', '==', 'completed')
+            );
+            
+            const sessionsSnapshot = await getDocs(sessionsQuery);
+            const sessions = sessionsSnapshot.docs
+              .map(doc => {
+                const data = doc.data();
+                
+                // Safely handle timestamp conversion
+                let startTime = null;
+                let endTime = null;
+                
+                try {
+                  if (data.startTime?.toDate) {
+                    startTime = data.startTime.toDate();
+                  }
+                  if (data.endTime?.toDate) {
+                    endTime = data.endTime.toDate();
+                  }
+                } catch (e) {
+                  console.error('Error converting timestamps:', e);
+                  return null;
+                }
+
+                return startTime && endTime ? { startTime, endTime } : null;
+              })
+              .filter(Boolean); // Remove any null sessions
+
+            // Calculate stats
+            const sessionCount = sessions.length;
+            const totalMinutes = sessions.reduce((acc, session) => {
+              const duration = (session.endTime - session.startTime) / (1000 * 60);
+              return acc + (isNaN(duration) ? 0 : Math.round(duration));
+            }, 0);
+
+            return {
+              ...participant,
+              sessionCount,
+              totalMinutes,
+              averageMinutes: sessionCount > 0 ? Math.round(totalMinutes / sessionCount) : 0
+            };
+          } catch (error) {
+            console.error(`Error processing sessions for ${participant.email}:`, error);
+            // Return participant with zero stats instead of failing
+            return {
+              ...participant,
+              sessionCount: 0,
+              totalMinutes: 0,
+              averageMinutes: 0
+            };
+          }
+        })
+      );
+
+      setParticipants(enrichedParticipants);
     } catch (error) {
       console.error('Error fetching participants:', error);
       toast.error('Error loading participants');
     } finally {
       setLoading(false);
     }
+  }; 
+
+  const formatDuration = (minutes) => {
+    if (minutes === 0) return '0m';
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours === 0) return `${remainingMinutes}m`;
+    return `${hours}h ${remainingMinutes}m`;
   };
 
   const filteredParticipants = participants
@@ -56,10 +130,26 @@ export default function ParticipantManager() {
           return sortVal * (a.email || '').localeCompare(b.email || '');
         case 'sessions':
           return sortVal * ((b.sessionCount || 0) - (a.sessionCount || 0));
+        case 'totalTime':
+          return sortVal * ((b.totalMinutes || 0) - (a.totalMinutes || 0));
+        case 'averageTime':
+          return sortVal * ((b.averageMinutes || 0) - (a.averageMinutes || 0));
         default:
           return 0;
       }
     });
+
+  const calculateAverages = () => {
+    const activeParticipants = filteredParticipants.filter(p => p.sessionCount > 0);
+    const totalSessions = activeParticipants.reduce((acc, p) => acc + p.sessionCount, 0);
+    const averageSessionsPerUser = activeParticipants.length > 0 
+      ? (totalSessions / activeParticipants.length).toFixed(1)
+      : '0.0';
+    const averageSessionLength = activeParticipants.length > 0
+      ? formatDuration(Math.round(activeParticipants.reduce((acc, p) => acc + p.averageMinutes, 0) / activeParticipants.length))
+      : '0m';
+    return { averageSessionsPerUser, averageSessionLength };
+  };
 
   const exportParticipants = () => {
     const exportData = filteredParticipants.map(p => ({
@@ -68,6 +158,8 @@ export default function ParticipantManager() {
       Role: p.role || 'N/A',
       'Join Date': p.joinDate instanceof Date ? p.joinDate.toLocaleDateString() : 'N/A',
       'Sessions Completed': p.sessionCount || 0,
+      'Total Time': formatDuration(p.totalMinutes || 0),
+      'Average Session Length': formatDuration(p.averageMinutes || 0),
       'Research Consented': p.hasConsented ? 'Yes' : 'No',
       'Research ID': p.role === 'research_participant' ? (p.anonymousId || 'N/A') : 'N/A'
     }));
@@ -77,7 +169,8 @@ export default function ParticipantManager() {
     XLSX.utils.book_append_sheet(wb, ws, 'Participants');
     const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const data = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    saveAs(data, 'participants.xlsx');
+    const timestamp = new Date().toISOString().split('T')[0];
+    saveAs(data, `participants-export-${timestamp}.xlsx`);
   };
 
   if (loading) {
@@ -87,6 +180,8 @@ export default function ParticipantManager() {
       </div>
     );
   }
+
+  const { averageSessionsPerUser, averageSessionLength } = calculateAverages();
 
   return (
     <div className="space-y-6">
@@ -160,6 +255,24 @@ export default function ParticipantManager() {
                 >
                   Sessions
                 </th>
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
+                  onClick={() => {
+                    setSortBy('totalTime');
+                    setSortOrder(current => current === 'asc' ? 'desc' : 'asc');
+                  }}
+                >
+                  Total Time
+                </th>
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
+                  onClick={() => {
+                    setSortBy('averageTime');
+                    setSortOrder(current => current === 'asc' ? 'desc' : 'asc');
+                  }}
+                >
+                  Avg. Session
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Research ID
                 </th>
@@ -193,6 +306,12 @@ export default function ParticipantManager() {
                     {participant.sessionCount || 0}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {formatDuration(participant.totalMinutes || 0)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {formatDuration(participant.averageMinutes || 0)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {participant.role === 'research_participant' ? participant.anonymousId || 'Not assigned' : '-'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -211,7 +330,7 @@ export default function ParticipantManager() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-lg shadow p-4">
           <div className="text-sm text-gray-500">Total Participants</div>
           <div className="text-2xl font-bold text-primary">{participants.length}</div>
@@ -223,12 +342,29 @@ export default function ParticipantManager() {
           </div>
         </div>
         <div className="bg-white rounded-lg shadow p-4">
-          <div className="text-sm text-gray-500">Average Sessions</div>
-          <div className="text-2xl font-bold text-primary">
-            {(participants.reduce((acc, p) => acc + (p.sessionCount || 0), 0) / participants.length || 0).toFixed(1)}
+          <div className="flex items-center gap-2">
+            <Calculator className="h-5 w-5 text-primary opacity-70" />
+            <div className="text-sm text-gray-500">Average Sessions/User</div>
+            </div>
+          <div className="text-2xl font-bold text-primary">{averageSessionsPerUser}</div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary opacity-70" />
+            <div className="text-sm text-gray-500">Average Session Length</div>
           </div>
+          <div className="text-2xl font-bold text-primary">{averageSessionLength}</div>
         </div>
       </div>
+
+      {/* Debug Info - Only visible in development */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-gray-50 p-4 rounded-lg text-sm text-gray-600">
+          <h4 className="font-semibold mb-2">Debug Information</h4>
+          <p>Total sessions found: {participants.reduce((acc, p) => acc + p.sessionCount, 0)}</p>
+          <p>Participants with sessions: {participants.filter(p => p.sessionCount > 0).length}</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,7 +12,11 @@ import {
     signOut,
     onAuthStateChanged,
     sendPasswordResetEmail,
-    sendEmailVerification
+    sendEmailVerification,
+    collection,
+    query,
+    where,
+    getDocs
 } from 'firebase/auth';
 import { 
     doc, 
@@ -35,10 +39,20 @@ export function AuthProvider({ children }) {
     // Reset password functionality
     const resetPassword = async (email) => {
         try {
+            // First check if the email exists in our users collection
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('email', '==', email));
+            const querySnapshot = await getDocs(q);
+            
+            if (querySnapshot.empty) {
+                throw new Error('No account found with this email');
+            }
+
             await sendPasswordResetEmail(auth, email);
             toast.success('Password reset email sent');
         } catch (error) {
-            toast.error('Error sending password reset email');
+            console.error('Password reset error:', error);
+            toast.error(error.message || 'Error sending password reset email');
             throw error;
         }
     };
@@ -60,8 +74,18 @@ export function AuthProvider({ children }) {
                     const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
                     const userData = userDoc.data();
 
-                    // Allow access if user is verified OR is an admin
-                    if (firebaseUser.emailVerified || userData?.role === UserType.ADMIN) {
+                    // Check if this is an existing user by looking at creation time
+                    const isExistingUser = userData?.createdAt && 
+                        (new Date(userData.createdAt.seconds * 1000) < new Date('2023-12-06'));
+
+                    // Allow access if:
+                    // 1. User is an admin OR
+                    // 2. User is verified OR
+                    // 3. User existed before verification requirement
+                    if (userData?.role === UserType.ADMIN || 
+                        firebaseUser.emailVerified || 
+                        isExistingUser) {
+                        
                         setUser({
                             ...firebaseUser,
                             role: userData?.role || UserType.PILOT_PARTICIPANT,
@@ -132,23 +156,29 @@ export function AuthProvider({ children }) {
             const userCredential = await signInWithEmailAndPassword(auth, email, password);
             const firebaseUser = userCredential.user;
 
-            // Check if user is admin first
+            // Get user data to check role and creation date
             const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
             const userData = userDoc.data();
 
-            // If not admin, verify email
-            if (userData?.role !== UserType.ADMIN && !firebaseUser.emailVerified) {
+            const isExistingUser = userData?.createdAt && 
+                (new Date(userData.createdAt.seconds * 1000) < new Date('2023-12-06'));
+
+            // Allow access if admin, verified, or existing user
+            if (userData?.role === UserType.ADMIN || 
+                firebaseUser.emailVerified || 
+                isExistingUser) {
+                
+                // Update last login timestamp
+                await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                    lastActive: serverTimestamp(),
+                    'metadata.lastLogin': new Date().toISOString()
+                });
+
+                return userCredential;
+            } else {
                 await signOut(auth);
                 throw { code: 'auth/unverified-email' };
             }
-
-            // Update last login timestamp
-            await updateDoc(doc(db, 'users', firebaseUser.uid), {
-                lastActive: serverTimestamp(),
-                'metadata.lastLogin': new Date().toISOString()
-            });
-
-            return userCredential;
         } catch (error) {
             setError(error.message);
             throw error;
