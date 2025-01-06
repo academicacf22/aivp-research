@@ -119,68 +119,77 @@ export function AuthProvider({ children }) {
         return () => unsubscribe();
     }, []);
 
-    // Signup function with email verification
+    // Signup function - simplified to only handle auth user creation and verification
     const signup = async (email, password) => {
         try {
+            // 1. Create Firebase Auth user
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
             const firebaseUser = userCredential.user;
             
-            // Send verification email
+            // 2. Send verification email
             await sendEmailVerification(firebaseUser);
             
-            // Create initial user document
-            await setDoc(doc(db, 'users', firebaseUser.uid), {
-                email: firebaseUser.email,
-                role: UserType.PILOT_PARTICIPANT,
-                hasConsented: false,
-                createdAt: serverTimestamp(),
-                lastActive: serverTimestamp(),
-                metadata: {
-                    signupDate: new Date().toISOString(),
-                    lastLogin: new Date().toISOString()
-                }
-            });
-
-            // Sign out immediately after signup so user must verify email
+            // 3. Sign out and wait for verification
             await signOut(auth);
             return userCredential;
         } catch (error) {
-            setError(error.message);
+            console.error('Signup error:', error);
+            await signOut(auth).catch(() => {});
             throw error;
         }
     };
 
-    // Login function with verification check
+    // Modified login function to handle first-time document creation
     const login = async (email, password) => {
         try {
             const userCredential = await signInWithEmailAndPassword(auth, email, password);
             const firebaseUser = userCredential.user;
 
-            // Get user data to check role and creation date
+            // Check if user document exists
             const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-            const userData = userDoc.data();
-
-            const isExistingUser = userData?.createdAt && 
-                (new Date(userData.createdAt.seconds * 1000) < new Date('2023-12-06'));
-
-            // Allow access if admin, verified, or existing user
-            if (userData?.role === UserType.ADMIN || 
-                firebaseUser.emailVerified || 
-                isExistingUser) {
-                
-                // Update last login timestamp
-                await updateDoc(doc(db, 'users', firebaseUser.uid), {
+            
+            // If no document exists and email is verified, create it
+            if (!userDoc.exists() && firebaseUser.emailVerified) {
+                await setDoc(doc(db, 'users', firebaseUser.uid), {
+                    email: firebaseUser.email,
+                    role: UserType.PILOT_PARTICIPANT,
+                    hasConsented: false,
+                    createdAt: serverTimestamp(),
                     lastActive: serverTimestamp(),
-                    'metadata.lastLogin': new Date().toISOString()
+                    emailVerified: firebaseUser.emailVerified,
+                    metadata: {
+                        signupDate: new Date().toISOString(),
+                        lastLogin: new Date().toISOString()
+                    }
                 });
-
                 return userCredential;
-            } else {
-                await signOut(auth);
-                throw { code: 'auth/unverified-email' };
             }
+
+            // For existing users, check verification status
+            if (userDoc.exists()) {
+                const userData = userDoc.data();
+                const isExistingUser = userData?.createdAt && 
+                    (new Date(userData.createdAt.seconds * 1000) < new Date('2023-12-06'));
+
+                if (userData?.role === UserType.ADMIN || 
+                    firebaseUser.emailVerified || 
+                    isExistingUser) {
+                    
+                    await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                        lastActive: serverTimestamp(),
+                        'metadata.lastLogin': new Date().toISOString(),
+                        emailVerified: firebaseUser.emailVerified
+                    });
+
+                    return userCredential;
+                }
+            }
+
+            // If email isn't verified, sign out and throw error
+            await signOut(auth);
+            throw { code: 'auth/unverified-email' };
         } catch (error) {
-            setError(error.message);
+            console.error('Login error:', error);
             throw error;
         }
     };
