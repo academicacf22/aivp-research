@@ -13,6 +13,7 @@ import { useAuth } from './AuthContext';
 import { jsPDF } from 'jspdf';
 import { generateAIResponse } from '../utils/openai';
 import { toast } from 'react-toastify';
+import { calculateTokensAndCost } from '../utils/tokenCounter';
 
 const ChatContext = createContext({});
 
@@ -127,8 +128,28 @@ export function ChatProvider({ children }) {
         }
       };
 
+      const { totalTokens, totalCost, model, error } = 
+        await calculateTokensAndCost(sessionRef.current.messages);
+      
+      console.log(`Token Count Summary:
+Model: ${model}
+Total Tokens: ${totalTokens === 0 ? 'No tokens used (no user messages)' : totalTokens || 'Error counting tokens'}
+Total Cost: ${totalCost === 0 ? '$0.00 (no API calls made)' : `$${totalCost}` || 'Error calculating cost'}
+Status: ${error ? `Error: ${error}` : 'Success'}`);
+
+      const transcriptData = {
+        ...sessionData,
+        tokenMetrics: {
+          totalTokens,
+          totalCost,
+          model,
+          error,
+          timestamp: serverTimestamp()
+        }
+      };
+
       // Save to transcripts collection
-      const transcriptRef = await addDoc(collection(db, 'transcripts'), sessionData);
+      const transcriptRef = await addDoc(collection(db, 'transcripts'), transcriptData);
 
       // Update session status
       if (sessionRef.current.docId) {

@@ -5,7 +5,7 @@ import {
   Users, 
   FileText, 
   BarChart2,
-  Settings 
+  DollarSign
 } from 'lucide-react';
 
 export default function AdminNav({ activeTab, setActiveTab }) {
@@ -14,6 +14,7 @@ export default function AdminNav({ activeTab, setActiveTab }) {
     { id: 'participants', label: 'Participants', icon: Users },
     { id: 'transcripts', label: 'Transcripts', icon: FileText },
     { id: 'metrics', label: 'Research Metrics', icon: BarChart2 },
+    { id: 'costs', label: 'Costs', icon: DollarSign },
   ];
 
   return (

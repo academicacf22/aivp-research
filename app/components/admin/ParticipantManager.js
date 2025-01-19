@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '@/app/firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { Search, Filter, Download, Mail, Clock, Calculator } from 'lucide-react';
+import { Search, Filter, Download, Mail, Clock, Calculator, Info } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -16,86 +16,85 @@ export default function ParticipantManager() {
   const [sortBy, setSortBy] = useState('joinDate');
   const [sortOrder, setSortOrder] = useState('desc');
 
+  // New state for research profiles and ATI info
+  const [researchProfiles, setResearchProfiles] = useState([]);
+  const [isATIInfoExpanded, setIsATIInfoExpanded] = useState(false);
+
   useEffect(() => {
     fetchParticipantsWithStats();
   }, []);
 
   const fetchParticipantsWithStats = async () => {
     try {
-      // First fetch all users
+      setLoading(true);
+      
+      // Fetch users
       const userSnapshot = await getDocs(collection(db, 'users'));
-      const participantData = userSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          joinDate: data.createdAt?.toDate?.() || new Date()
-        };
-      });
-
-      // Process each participant's sessions
+      
+      // Process participants with their session stats
       const enrichedParticipants = await Promise.all(
-        participantData.map(async (participant) => {
-          try {
-            const sessionsRef = collection(db, 'sessions');
-            const sessionsQuery = query(
-              sessionsRef,
-              where('userId', '==', participant.id),
-              where('status', '==', 'completed')
-            );
-            
-            const sessionsSnapshot = await getDocs(sessionsQuery);
-            const sessions = sessionsSnapshot.docs
-              .map(doc => {
-                const data = doc.data();
-                
-                // Safely handle timestamp conversion
-                let startTime = null;
-                let endTime = null;
-                
-                try {
-                  if (data.startTime?.toDate) {
-                    startTime = data.startTime.toDate();
-                  }
-                  if (data.endTime?.toDate) {
-                    endTime = data.endTime.toDate();
-                  }
-                } catch (e) {
-                  console.error('Error converting timestamps:', e);
-                  return null;
-                }
+        userSnapshot.docs.map(async (doc) => {
+          const userData = doc.data();
+          
+          // Fetch sessions for this user
+          const sessionsQuery = query(
+            collection(db, 'sessions'),
+            where('userId', '==', doc.id)
+          );
+          const sessionsSnapshot = await getDocs(sessionsQuery);
+          const sessions = sessionsSnapshot.docs.map(session => session.data());
+          
+          // Calculate session stats
+          const sessionCount = sessions.length;
+          const totalTime = sessions.reduce((total, session) => {
+            return total + (session.duration || 0);
+          }, 0);
+          
+          // Calculate average session length rounded to nearest minute
+          const avgSessionLength = sessionCount > 0 
+            ? `${Math.round(totalTime / sessionCount)}m`
+            : '0m';
 
-                return startTime && endTime ? { startTime, endTime } : null;
-              })
-              .filter(Boolean); // Remove any null sessions
-
-            // Calculate stats
-            const sessionCount = sessions.length;
-            const totalMinutes = sessions.reduce((acc, session) => {
-              const duration = (session.endTime - session.startTime) / (1000 * 60);
-              return acc + (isNaN(duration) ? 0 : Math.round(duration));
-            }, 0);
-
-            return {
-              ...participant,
-              sessionCount,
-              totalMinutes,
-              averageMinutes: sessionCount > 0 ? Math.round(totalMinutes / sessionCount) : 0
-            };
-          } catch (error) {
-            console.error(`Error processing sessions for ${participant.email}:`, error);
-            // Return participant with zero stats instead of failing
-            return {
-              ...participant,
-              sessionCount: 0,
-              totalMinutes: 0,
-              averageMinutes: 0
-            };
-          }
+          return {
+            id: doc.id,
+            ...userData,
+            joinDate: userData.createdAt?.toDate?.() || new Date(),
+            sessionCount,
+            totalTime,
+            avgSessionLength
+          };
         })
       );
-
       setParticipants(enrichedParticipants);
+
+      // Research profiles data fetching (keep this part as is)
+      const researchProfilesSnapshot = await getDocs(collection(db, 'research_participants'));
+      const researchProfilesData = researchProfilesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Join with users data (keep this part as is)
+      const researchParticipants = enrichedParticipants
+        .filter(user => user.role === 'research_participant' && !user.consentWithdrawnAt)
+        .map(user => {
+          const profile = researchProfilesData.find(p => p.userId === user.id);
+          if (!profile) return null;
+          
+          return {
+            id: user.id,
+            anonymousId: user.anonymousId,
+            yearGroup: profile.yearGroup,
+            ageGroup: profile.ageGroup,
+            gender: profile.gender,
+            ethnicity: profile.ethnicity,
+            atiScore: Number(profile.atiScore)
+          };
+        })
+        .filter(Boolean);
+
+      setResearchProfiles(researchParticipants);
+
     } catch (error) {
       console.error('Error fetching participants:', error);
       toast.error('Error loading participants');
@@ -131,9 +130,9 @@ export default function ParticipantManager() {
         case 'sessions':
           return sortVal * ((b.sessionCount || 0) - (a.sessionCount || 0));
         case 'totalTime':
-          return sortVal * ((b.totalMinutes || 0) - (a.totalMinutes || 0));
+          return sortVal * ((b.totalTime || 0) - (a.totalTime || 0));
         case 'averageTime':
-          return sortVal * ((b.averageMinutes || 0) - (a.averageMinutes || 0));
+          return sortVal * ((b.avgSessionLength || 0) - (a.avgSessionLength || 0));
         default:
           return 0;
       }
@@ -146,7 +145,7 @@ export default function ParticipantManager() {
       ? (totalSessions / activeParticipants.length).toFixed(1)
       : '0.0';
     const averageSessionLength = activeParticipants.length > 0
-      ? formatDuration(Math.round(activeParticipants.reduce((acc, p) => acc + p.averageMinutes, 0) / activeParticipants.length))
+      ? formatDuration(Math.round(activeParticipants.reduce((acc, p) => acc + p.totalTime, 0) / activeParticipants.length))
       : '0m';
     return { averageSessionsPerUser, averageSessionLength };
   };
@@ -158,8 +157,8 @@ export default function ParticipantManager() {
       Role: p.role || 'N/A',
       'Join Date': p.joinDate instanceof Date ? p.joinDate.toLocaleDateString() : 'N/A',
       'Sessions Completed': p.sessionCount || 0,
-      'Total Time': formatDuration(p.totalMinutes || 0),
-      'Average Session Length': formatDuration(p.averageMinutes || 0),
+      'Total Time': formatDuration(p.totalTime || 0),
+      'Average Session Length': formatDuration(p.totalTime || 0),
       'Research Consented': p.hasConsented ? 'Yes' : 'No',
       'Research ID': p.role === 'research_participant' ? (p.anonymousId || 'N/A') : 'N/A'
     }));
@@ -182,6 +181,13 @@ export default function ParticipantManager() {
   }
 
   const { averageSessionsPerUser, averageSessionLength } = calculateAverages();
+
+  // Helper function to interpret ATI score
+  const getATIInterpretation = (score) => {
+    if (score < 2.6) return 'Low affinity';
+    if (score > 4.6) return 'High affinity';
+    return 'Moderate affinity';
+  };
 
   return (
     <div className="space-y-6">
@@ -221,6 +227,13 @@ export default function ParticipantManager() {
 
       {/* Participants Table */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <h3 className="text-lg font-medium text-gray-900">Participants</h3>
+          <div className="flex space-x-2">
+            {/* ... your existing buttons/controls ... */}
+          </div>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -306,10 +319,10 @@ export default function ParticipantManager() {
                     {participant.sessionCount || 0}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDuration(participant.totalMinutes || 0)}
+                    {formatDuration(participant.totalTime || 0)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDuration(participant.averageMinutes || 0)}
+                    {formatDuration(participant.totalTime || 0)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {participant.role === 'research_participant' ? participant.anonymousId || 'Not assigned' : '-'}
@@ -327,6 +340,129 @@ export default function ParticipantManager() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Research Participant Profiles Table */}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Research Participant Profiles</h3>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Research ID
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Academic Year
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Age Group
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Gender
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Ethnicity
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  ATI Score
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {researchProfiles.map((profile) => (
+                <tr key={profile.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {profile.anonymousId}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    Year {profile.yearGroup}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {profile.ageGroup}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {profile.gender}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {profile.ethnicity}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {typeof profile.atiScore === 'number' 
+                      ? `${profile.atiScore.toFixed(2)} (${getATIInterpretation(profile.atiScore)})`
+                      : '-'
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ATI Information Card */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-2">
+            <Info className="h-5 w-5 text-primary" />
+            <h3 className="text-lg font-medium text-gray-900">About the ATI Scale</h3>
+          </div>
+          <button
+            onClick={() => setIsATIInfoExpanded(!isATIInfoExpanded)}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            {isATIInfoExpanded ? '−' : '+'}
+          </button>
+        </div>
+
+        {isATIInfoExpanded && (
+          <div className="space-y-4 text-sm text-gray-600">
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">CALCULATION:</h4>
+              <ul className="list-disc list-inside space-y-1">
+                <li>9-item scale measuring a person's tendency to actively engage with technology</li>
+                <li>Each item rated 1 (completely disagree) to 6 (completely agree)</li>
+                <li>Items 3, 6, and 8 are reverse-scored</li>
+                <li>Final score is the mean of all 9 items (range: 1-6)</li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">INTERPRETATION:</h4>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Higher scores indicate greater tendency to actively engage with technology</li>
+                <li>Population mean: 3.6 (SD = 1.0)</li>
+                <li>Scores &lt; 2.6: Low affinity (1 SD below mean)</li>
+                <li>Scores 2.6-4.6: Moderate affinity (±1 SD around mean)</li>
+                <li>Scores &gt; 4.6: High affinity (1 SD above mean)</li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="font-medium text-gray-900 mb-2">VALIDATION:</h4>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Developed through 6 studies (N = 1,554)</li>
+                <li>High internal consistency (Cronbach's α = .83-.92)</li>
+                <li>Strong test-retest reliability (r = .85 over 8 weeks)</li>
+                <li>Validated in German and English</li>
+              </ul>
+            </div>
+
+            <div className="text-xs italic mt-4">
+              <p>Source: <a 
+                href="https://www.tandfonline.com/doi/full/10.1080/10447318.2018.1456150" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-primary hover:text-primary-dark underline"
+              >
+                Franke, T., Attig, C., & Wessel, D. (2019). A Personal Resource for Technology Interaction: Development and Validation of the Affinity for Technology Interaction (ATI) Scale. International Journal of Human–Computer Interaction, 35(6), 456-467.
+              </a></p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Summary Stats */}

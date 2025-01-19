@@ -3,28 +3,25 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '@/app/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { 
-  Users, 
-  MessageSquare, 
-  Clock, 
-  FileText,
-  AlertTriangle,
-  BarChart 
-} from 'lucide-react';
+import { collection, getDocs, deleteDoc, query, where, updateDoc } from 'firebase/firestore';
 import { toast } from 'react-toastify';
+import { FileText, Users, Clock } from 'lucide-react';
+import ParticipantManager from './ParticipantManager';
+import TranscriptManager from './TranscriptManager';
+import ResearchMetrics from './ResearchMetrics';
+import CostsManager from './CostsManager';
 
 export default function AdminDashboard() {
+  const [isResetting, setIsResetting] = useState(false);
+  const [isResettingStats, setIsResettingStats] = useState(false);
   const [stats, setStats] = useState({
     totalUsers: 0,
-    pilotParticipants: 0,
     researchParticipants: 0,
-    activeResearchParticipants: 0,
-    totalSessions: 0,
-    averageSessionLength: 0,
-    recentTranscripts: []
+    pilotParticipants: 0,
+    withdrawnParticipants: 0,
+    researchSessions: 0,
+    avgSessionDuration: 0
   });
-  const [resetLoading, setResetLoading] = useState(false);
 
   useEffect(() => {
     fetchDashboardStats();
@@ -37,13 +34,11 @@ export default function AdminDashboard() {
       const users = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
       // Calculate user statistics
-      const pilotParticipants = users.filter(user => user.role === 'pilot_participant');
       const researchParticipants = users.filter(user => user.role === 'research_participant');
-      const activeResearchParticipants = researchParticipants.filter(user => 
-        !user.consentWithdrawnAt && user.hasConsented
-      );
+      const pilotParticipants = users.filter(user => user.role === 'pilot_participant');
+      const withdrawnParticipants = researchParticipants.filter(user => user.consentWithdrawnAt);
       
-      // Fetch research transcripts only
+      // Fetch research transcripts
       const transcriptsQuery = query(
         collection(db, 'transcripts'), 
         where('isResearchSession', '==', true)
@@ -51,25 +46,20 @@ export default function AdminDashboard() {
       const transcriptsSnapshot = await getDocs(transcriptsQuery);
       const transcripts = transcriptsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
-      // Calculate total session time for research participants
-      const totalSessionTime = transcripts.reduce((acc, t) => {
+      // Calculate average session duration
+      const totalDuration = transcripts.reduce((acc, t) => {
         const duration = t.endTime?.seconds - t.startTime?.seconds || 0;
         return acc + duration;
       }, 0);
-
-      // Get recent research transcripts
-      const recentTranscripts = transcripts
-        .sort((a, b) => b.startTime?.seconds - a.startTime?.seconds)
-        .slice(0, 5);
+      const avgDuration = transcripts.length ? Math.round(totalDuration / transcripts.length / 60) : 0;
 
       setStats({
         totalUsers: users.length,
-        pilotParticipants: pilotParticipants.length,
         researchParticipants: researchParticipants.length,
-        activeResearchParticipants: activeResearchParticipants.length,
-        totalSessions: transcripts.length,
-        averageSessionLength: transcripts.length > 0 ? Math.round(totalSessionTime / transcripts.length / 60) : 0,
-        recentTranscripts
+        pilotParticipants: pilotParticipants.length,
+        withdrawnParticipants: withdrawnParticipants.length,
+        researchSessions: transcripts.length,
+        avgSessionDuration: avgDuration
       });
     } catch (error) {
       console.error('Error fetching dashboard stats:', error);
@@ -77,125 +67,174 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDataReset = async () => {
-    if (!window.confirm(
-      'WARNING: This will permanently delete all research data including transcripts and metrics. This action cannot be undone. Are you sure you want to proceed?'
-    )) return;
+  const resetAllStats = async () => {
+    if (!window.confirm('Are you sure you want to reset all statistics? This will clear all historical data including transcripts, sessions, and costs while preserving user accounts and consent records. This action cannot be undone.')) {
+      return;
+    }
 
-    if (!window.confirm(
-      'Please confirm again that you want to reset all research data. This will remove ALL research participant data and cannot be recovered.'
-    )) return;
-
-    setResetLoading(true);
+    setIsResettingStats(true);
     try {
-      // Reset research participants to pilot status
-      const usersRef = collection(db, 'users');
-      const researchQuery = query(usersRef, where('role', '==', 'research_participant'));
-      const researchSnapshot = await getDocs(researchQuery);
+      // 1. Clear transcripts collection
+      const transcriptsRef = collection(db, 'transcripts');
+      const transcriptsSnapshot = await getDocs(transcriptsRef);
+      const deleteTranscripts = transcriptsSnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deleteTranscripts);
 
-      await Promise.all(researchSnapshot.docs.map(doc => {
-        return updateDoc(doc.ref, {
+      // 2. Clear sessions collection
+      const sessionsRef = collection(db, 'sessions');
+      const sessionsSnapshot = await getDocs(sessionsRef);
+      const deleteSessions = sessionsSnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deleteSessions);
+
+      // 3. Reset user statistics while preserving accounts and consent
+      const usersRef = collection(db, 'users');
+      const usersSnapshot = await getDocs(usersRef);
+      const updateUsers = usersSnapshot.docs.map(doc => 
+        updateDoc(doc.ref, {
+          sessionCount: 0,
+          totalTime: 0,
+          lastSession: null,
+          // Preserve: role, email, hasConsented, consentDate, anonymousId
+        })
+      );
+      await Promise.all(updateUsers);
+
+      toast.success('All statistics have been reset successfully');
+      fetchDashboardStats(); // Refresh stats after reset
+    } catch (error) {
+      console.error('Error resetting statistics:', error);
+      toast.error('Error resetting statistics');
+    } finally {
+      setIsResettingStats(false);
+    }
+  };
+
+  const resetResearchData = async () => {
+    if (!window.confirm('Are you sure you want to reset all research data? This action cannot be undone.')) {
+      return;
+    }
+
+    setIsResetting(true);
+    try {
+      // 1. Convert research participants to pilot participants
+      const usersRef = collection(db, 'users');
+      const researchUsersQuery = query(usersRef, where('role', '==', 'research_participant'));
+      const researchUsersSnapshot = await getDocs(researchUsersQuery);
+      
+      const updatePromises = researchUsersSnapshot.docs.map(doc => 
+        updateDoc(doc.ref, {
           role: 'pilot_participant',
           hasConsented: false,
-          anonymousId: null,
-          consentDetails: null,
-          lastUpdated: serverTimestamp()
-        });
-      }));
+          consentDate: null,
+          consentWithdrawnAt: null
+        })
+      );
+      await Promise.all(updatePromises);
 
-      // Delete all research transcripts
+      // 2. Delete research transcripts and metrics
       const transcriptsRef = collection(db, 'transcripts');
       const transcriptsQuery = query(transcriptsRef, where('isResearchSession', '==', true));
       const transcriptsSnapshot = await getDocs(transcriptsQuery);
-
-      await Promise.all(transcriptsSnapshot.docs.map(doc => deleteDoc(doc.ref)));
-
-      // Delete all research participant profiles
-      const participantsRef = collection(db, 'research_participants');
-      const participantsSnapshot = await getDocs(participantsRef);
-
-      await Promise.all(participantsSnapshot.docs.map(doc => deleteDoc(doc.ref)));
-
-      // Add reset event to audit log
-      await addDoc(collection(db, 'audit_logs'), {
-        type: 'data_reset',
-        timestamp: serverTimestamp(),
-        details: {
-          researchParticipantsReset: researchSnapshot.docs.length,
-          transcriptsDeleted: transcriptsSnapshot.docs.length,
-          profilesDeleted: participantsSnapshot.docs.length
-        }
-      });
+      
+      const deletePromises = transcriptsSnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deletePromises);
 
       toast.success('Research data has been reset successfully');
-      fetchDashboardStats(); // Refresh stats
+      fetchDashboardStats(); // Refresh stats after reset
     } catch (error) {
-      console.error('Error resetting data:', error);
+      console.error('Error resetting research data:', error);
       toast.error('Error resetting research data');
     } finally {
-      setResetLoading(false);
+      setIsResetting(false);
     }
   };
 
   return (
-    <div className="space-y-8">
-      {/* User Statistics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <StatCard
-          title="Total Users"
-          value={stats.totalUsers}
-          icon={Users}
-          description="All registered platform users"
-          breakdown={[
-            { label: 'Research Participants', value: stats.researchParticipants },
-            { label: 'Pilot Participants', value: stats.pilotParticipants }
-          ]}
-        />
-        <StatCard
-          title="Research Participants"
-          value={stats.activeResearchParticipants}
-          icon={Users}
-          description="Active research participants"
-          detail={`${stats.researchParticipants - stats.activeResearchParticipants} withdrawn`}
-          highlight
-        />
-        <StatCard
-          title="Research Sessions"
-          value={stats.totalSessions}
-          icon={MessageSquare}
-          description="Total research consultations"
-          detail={`Avg. ${stats.averageSessionLength} min per session`}
-        />
+    <div className="space-y-6">
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Total Users</h3>
+          <div className="text-3xl font-bold text-primary">{stats.totalUsers}</div>
+          <p className="text-sm text-gray-500 mt-2">All registered platform users</p>
+          <div className="mt-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Research Participants</span>
+              <span>{stats.researchParticipants}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>Pilot Participants</span>
+              <span>{stats.pilotParticipants}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Research Participants</h3>
+          <div className="text-3xl font-bold text-primary">{stats.researchParticipants}</div>
+          <p className="text-sm text-gray-500 mt-2">Active research participants</p>
+          <div className="mt-4">
+            <div className="flex justify-between text-sm">
+              <span>Withdrawn</span>
+              <span>{stats.withdrawnParticipants}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Research Sessions</h3>
+          <div className="text-3xl font-bold text-primary">{stats.researchSessions}</div>
+          <p className="text-sm text-gray-500 mt-2">Total research consultations</p>
+          <div className="mt-4">
+            <div className="flex justify-between text-sm">
+              <span>Avg. Duration</span>
+              <span>{stats.avgSessionDuration} min per session</span>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Data Reset Section */}
+      {/* Data Management Section */}
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex justify-between items-start mb-4">
           <div>
-            <h2 className="text-xl font-semibold text-primary">Data Management</h2>
-            <p className="text-sm text-gray-600 mt-1">Reset research data for new study phase</p>
+            <h3 className="text-lg font-medium text-gray-900">Data Management</h3>
+            <p className="text-sm text-gray-500">Reset data for new study phases</p>
           </div>
-          <button
-            onClick={handleDataReset}
-            disabled={resetLoading}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition duration-200 flex items-center gap-2 disabled:opacity-50"
-          >
-            <AlertTriangle className="h-5 w-5" />
-            {resetLoading ? 'Resetting...' : 'Reset Research Data'}
-          </button>
+          <div className="space-x-4">
+            <button
+              onClick={resetAllStats}
+              disabled={isResettingStats}
+              className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
+            >
+              {isResettingStats ? 'Resetting Stats...' : 'Reset All Statistics'}
+            </button>
+            <button
+              onClick={resetResearchData}
+              disabled={isResetting}
+              className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
+            >
+              {isResetting ? 'Resetting...' : 'Reset Research Data'}
+            </button>
+          </div>
         </div>
+
+        {/* Warning Box */}
         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mt-4">
           <div className="flex">
-            <div className="flex-shrink-0">
-              <AlertTriangle className="h-5 w-5 text-yellow-400" />
-            </div>
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-yellow-800">
-                Warning: Data Reset
-              </h3>
+              <h3 className="text-sm font-medium text-yellow-800">Warning: Data Reset Options</h3>
               <div className="mt-2 text-sm text-yellow-700">
-                <p>Resetting research data will:</p>
-                <ul className="list-disc list-inside mt-1">
+                <p className="font-medium">Reset All Statistics will:</p>
+                <ul className="list-disc list-inside mt-2">
+                  <li>Clear all transcripts and session records</li>
+                  <li>Reset user statistics while preserving accounts</li>
+                  <li>Clear token usage and cost tracking data</li>
+                  <li>Maintain user consent records</li>
+                </ul>
+                
+                <p className="font-medium mt-4">Reset Research Data will:</p>
+                <ul className="list-disc list-inside mt-2">
                   <li>Convert all research participants to pilot participants</li>
                   <li>Delete all research transcripts and metrics</li>
                   <li>Remove all research participant profiles</li>
@@ -207,29 +246,20 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Recent Research Transcripts */}
+      {/* Model Pricing Section */}
       <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-primary mb-4">Recent Research Consultations</h2>
-        <div className="space-y-4">
-          {stats.recentTranscripts.map((transcript) => (
-            <div 
-              key={transcript.id} 
-              className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
-            >
-              <div className="flex items-center space-x-4">
-                <FileText className="h-5 w-5 text-primary" />
-                <div>
-                  <p className="font-medium">Research ID: {transcript.anonymousId}</p>
-                  <p className="text-sm text-gray-500">
-                    {new Date(transcript.startTime?.seconds * 1000).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-              <span className="text-sm text-gray-500">
-                {Math.round((transcript.endTime?.seconds - transcript.startTime?.seconds) / 60)} minutes
-              </span>
-            </div>
-          ))}
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Current Model Pricing</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <h4 className="font-medium text-gray-900 mb-2">gpt-3.5-turbo</h4>
+            <p className="text-sm text-gray-600">Input: $0.0015 per 1K tokens</p>
+            <p className="text-sm text-gray-600">Output: $0.002 per 1K tokens</p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <h4 className="font-medium text-gray-900 mb-2">gpt-4</h4>
+            <p className="text-sm text-gray-600">Input: $0.03 per 1K tokens</p>
+            <p className="text-sm text-gray-600">Output: $0.06 per 1K tokens</p>
+          </div>
         </div>
       </div>
     </div>

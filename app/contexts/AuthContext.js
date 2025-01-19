@@ -12,13 +12,13 @@ import {
     signOut,
     onAuthStateChanged,
     sendPasswordResetEmail,
-    sendEmailVerification,
+    sendEmailVerification
+} from 'firebase/auth';
+import {
     collection,
     query,
     where,
-    getDocs
-} from 'firebase/auth';
-import { 
+    getDocs,
     doc, 
     getDoc, 
     setDoc, 

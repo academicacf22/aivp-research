@@ -9,6 +9,7 @@ import AdminDashboard from '../components/admin/AdminDashboard';
 import ParticipantManager from '../components/admin/ParticipantManager';
 import TranscriptManager from '../components/admin/TranscriptManager';
 import ResearchMetrics from '../components/admin/ResearchMetrics';
+import CostsManager from '../components/admin/CostsManager';
 import { toast } from 'react-toastify';
 
 export default function AdminPage() {
@@ -47,6 +48,8 @@ export default function AdminPage() {
         return <TranscriptManager />;
       case 'metrics':
         return <ResearchMetrics />;
+      case 'costs':
+        return <CostsManager />;
       default:
         return <AdminDashboard />;
     }
