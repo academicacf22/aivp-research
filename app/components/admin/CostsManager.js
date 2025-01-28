@@ -42,6 +42,35 @@ export default function CostsManager() {
   const [participantType, setParticipantType] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Add new state for stats
+  const [stats, setStats] = useState({
+    consultations: {
+      total: 0,
+      research: 0,
+      pilot: 0,
+      peakPeriod: { period: '', count: 0 }
+    },
+    tokens: {
+      total: 0,
+      research: 0,
+      pilot: 0,
+      avgPerSession: {
+        research: 0,
+        pilot: 0
+      }
+    },
+    costs: {
+      total: 0,
+      research: 0,
+      pilot: 0,
+      avgPerSession: {
+        research: 0,
+        pilot: 0
+      },
+      peakPeriod: { period: '', amount: 0 }
+    }
+  });
+
   useEffect(() => {
     fetchTranscripts();
   }, [dateRange, selectedModel, participantType]); // Fetch when filters change
@@ -89,6 +118,41 @@ export default function CostsManager() {
         startTime: doc.data().startTime?.toDate(),
         endTime: doc.data().endTime?.toDate()
       }));
+
+      // Calculate stats from all transcripts
+      const statsData = {
+        consultations: {
+          total: docs.length,
+          research: docs.filter(d => d.isResearchSession).length,
+          pilot: docs.filter(d => !d.isResearchSession).length,
+          peakPeriod: calculatePeakPeriod(docs)
+        },
+        tokens: {
+          total: docs.reduce((acc, d) => acc + (d.tokenMetrics?.totalTokens || 0), 0),
+          research: docs.filter(d => d.isResearchSession)
+            .reduce((acc, d) => acc + (d.tokenMetrics?.totalTokens || 0), 0),
+          pilot: docs.filter(d => !d.isResearchSession)
+            .reduce((acc, d) => acc + (d.tokenMetrics?.totalTokens || 0), 0),
+          avgPerSession: {
+            research: calculateAvgTokens(docs.filter(d => d.isResearchSession)),
+            pilot: calculateAvgTokens(docs.filter(d => !d.isResearchSession))
+          }
+        },
+        costs: {
+          total: docs.reduce((acc, d) => acc + (d.tokenMetrics?.totalCost || 0), 0),
+          research: docs.filter(d => d.isResearchSession)
+            .reduce((acc, d) => acc + (d.tokenMetrics?.totalCost || 0), 0),
+          pilot: docs.filter(d => !d.isResearchSession)
+            .reduce((acc, d) => acc + (d.tokenMetrics?.totalCost || 0), 0),
+          avgPerSession: {
+            research: calculateAvgCost(docs.filter(d => d.isResearchSession)),
+            pilot: calculateAvgCost(docs.filter(d => !d.isResearchSession))
+          },
+          peakPeriod: calculatePeakCostPeriod(docs)
+        }
+      };
+
+      setStats(statsData);
 
       setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
       setHasMore(snapshot.docs.length === ITEMS_PER_PAGE);
@@ -193,9 +257,94 @@ export default function CostsManager() {
     }
   };
 
+  // Helper functions for stats calculations
+  const calculateAvgTokens = (transcripts) => {
+    if (!transcripts.length) return 0;
+    const total = transcripts.reduce((acc, t) => acc + (t.tokenMetrics?.totalTokens || 0), 0);
+    return Math.round(total / transcripts.length);
+  };
+
+  const calculateAvgCost = (transcripts) => {
+    if (!transcripts.length) return 0;
+    const total = transcripts.reduce((acc, t) => acc + (t.tokenMetrics?.totalCost || 0), 0);
+    return total / transcripts.length;
+  };
+
+  const calculatePeakPeriod = (transcripts) => {
+    if (!transcripts.length) return { period: 'N/A', count: 0 };
+    const periods = transcripts.reduce((acc, t) => {
+      const period = t.startTime.toLocaleString('default', { month: 'short', year: '2-digit' });
+      acc[period] = (acc[period] || 0) + 1;
+      return acc;
+    }, {});
+    const peak = Object.entries(periods).reduce((a, b) => b[1] > a[1] ? b : a);
+    return { period: peak[0], count: peak[1] };
+  };
+
+  const calculatePeakCostPeriod = (transcripts) => {
+    if (!transcripts.length) return { period: 'N/A', amount: 0 };
+    const periods = transcripts.reduce((acc, t) => {
+      const period = t.startTime.toLocaleString('default', { month: 'short', year: '2-digit' });
+      acc[period] = (acc[period] || 0) + (t.tokenMetrics?.totalCost || 0);
+      return acc;
+    }, {});
+    const peak = Object.entries(periods).reduce((a, b) => b[1] > a[1] ? b : a);
+    return { period: peak[0], amount: peak[1] };
+  };
+
+  // Add back the export functions
+  const exportUserSummary = () => {
+    const summaryData = transcripts.reduce((acc, transcript) => {
+      const userId = transcript.isResearchSession ? transcript.anonymousId : transcript.userId;
+      const existingUser = acc.find(u => u.id === userId);
+      
+      if (existingUser) {
+        existingUser.consultations += 1;
+        existingUser.totalCost += transcript.tokenMetrics?.totalCost || 0;
+        existingUser.totalMessages += transcript.messages?.filter(m => m.type === 'user').length || 0;
+      } else {
+        acc.push({
+          'User/Research ID': userId,
+          'Type': transcript.isResearchSession ? 'Research' : 'Pilot',
+          'Consultations': 1,
+          'Total Cost': transcript.tokenMetrics?.totalCost || 0,
+          'Total Messages': transcript.messages?.filter(m => m.type === 'user').length || 0
+        });
+      }
+      return acc;
+    }, []);
+
+    const ws = XLSX.utils.json_to_sheet(summaryData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'User Summary');
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const data = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    saveAs(data, 'user-summary.xlsx');
+  };
+
+  const exportConsultations = () => {
+    const consultationData = transcripts.map(transcript => ({
+      'Date & Time': transcript.startTime?.toLocaleString(),
+      'User/Research ID': transcript.isResearchSession ? transcript.anonymousId : transcript.userId,
+      'Type': transcript.isResearchSession ? 'Research' : 'Pilot',
+      'Model': transcript.tokenMetrics?.model || 'Unknown',
+      'Duration (min)': Math.round((transcript.endTime - transcript.startTime) / (1000 * 60)),
+      'Messages': transcript.messages?.filter(m => m.type === 'user').length || 0,
+      'Tokens': transcript.tokenMetrics?.totalTokens || 0,
+      'Cost': transcript.tokenMetrics?.totalCost || 0
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(consultationData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Consultations');
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const data = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    saveAs(data, 'consultations.xlsx');
+  };
+
   return (
     <div className="space-y-6">
-      {/* Model Pricing Information Card */}
+      {/* Model Pricing Section */}
       <div className="bg-white rounded-lg shadow p-6">
         <h3 className="text-lg font-medium text-gray-900 mb-4">Current Model Pricing</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -217,44 +366,32 @@ export default function CostsManager() {
         </div>
       </div>
 
-      {/* Filters and Export Button */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex flex-col md:flex-row justify-between items-center mb-4">
-          <h3 className="text-lg font-medium text-gray-900">Consultation Costs</h3>
-          <button
-            onClick={exportToExcel}
-            className="mt-2 md:mt-0 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Export to Excel
-          </button>
-        </div>
+      {/* Filters Section - Moved to top */}
+      <div className="bg-white rounded-lg shadow p-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <select
             value={dateRange}
-            onChange={(e) => handleDateRangeChange(e.target.value)}
+            onChange={(e) => setDateRange(e.target.value)}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary"
           >
-            <option value="all">All Time</option>
-            <option value="7days">Last 7 Days</option>
-            <option value="1month">Last Month</option>
-            <option value="3months">Last 3 Months</option>
+            {Object.entries(DATE_PRESETS).map(([key, { label }]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
           </select>
 
           <select
             value={selectedModel}
-            onChange={(e) => handleModelChange(e.target.value)}
+            onChange={(e) => setSelectedModel(e.target.value)}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary"
           >
             <option value="all">All Models</option>
             <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
             <option value="gpt-4">GPT-4</option>
-            <option value="gpt-4o-mini">GPT-4o Mini</option>
           </select>
 
           <select
             value={participantType}
-            onChange={(e) => handleParticipantTypeChange(e.target.value)}
+            onChange={(e) => setParticipantType(e.target.value)}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary"
           >
             <option value="all">All Participants</option>
@@ -272,8 +409,188 @@ export default function CostsManager() {
         </div>
       </div>
 
-      {/* Results Table */}
+      {/* Stats Cards Section */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Consultation Stats */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Consultations</h3>
+          <div className="text-3xl font-bold text-primary">{stats.consultations.total}</div>
+          <div className="mt-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Research Sessions</span>
+              <span>{stats.consultations.research}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>Pilot Sessions</span>
+              <span>{stats.consultations.pilot}</span>
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <div className="text-sm text-gray-500">Peak Usage</div>
+              <div className="text-sm font-medium">
+                {stats.consultations.peakPeriod.period}: {stats.consultations.peakPeriod.count} sessions
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Token Usage Stats */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Token Usage</h3>
+          <div className="text-3xl font-bold text-primary">
+            {stats.tokens.total.toLocaleString()}
+          </div>
+          <div className="mt-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Research Sessions</span>
+              <span>{stats.tokens.research.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>Pilot Sessions</span>
+              <span>{stats.tokens.pilot.toLocaleString()}</span>
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <div className="text-sm text-gray-500">Average per Session</div>
+              <div className="flex justify-between text-sm">
+                <span>Research</span>
+                <span>{stats.tokens.avgPerSession.research.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Pilot</span>
+                <span>{stats.tokens.avgPerSession.pilot.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Cost Analysis Stats */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Cost Analysis</h3>
+          <div className="text-3xl font-bold text-primary">
+            ${stats.costs.total.toFixed(2)}
+          </div>
+          <div className="mt-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Research Sessions</span>
+              <span>${stats.costs.research.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>Pilot Sessions</span>
+              <span>${stats.costs.pilot.toFixed(2)}</span>
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <div className="text-sm text-gray-500">Average per Session</div>
+              <div className="flex justify-between text-sm">
+                <span>Research</span>
+                <span>${stats.costs.avgPerSession.research.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Pilot</span>
+                <span>${stats.costs.avgPerSession.pilot.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <div className="text-sm text-gray-500">Peak Cost Period</div>
+              <div className="text-sm font-medium">
+                {stats.costs.peakPeriod.period}: ${stats.costs.peakPeriod.amount.toFixed(2)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* User Summary Table - Now with export button */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <h3 className="text-lg font-semibold text-primary">User Summary</h3>
+          <button
+            onClick={exportUserSummary}
+            className="flex items-center space-x-2 px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export to Excel</span>
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  User/Research ID
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Consultations
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Total Cost
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Total Messages
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {transcripts.reduce((acc, transcript) => {
+                const userId = transcript.isResearchSession ? transcript.anonymousId : transcript.userId;
+                const existingUser = acc.find(u => u.id === userId);
+                
+                if (existingUser) {
+                  existingUser.consultations += 1;
+                  existingUser.totalCost += transcript.tokenMetrics?.totalCost || 0;
+                  existingUser.totalMessages += transcript.messages?.filter(m => m.type === 'user').length || 0;
+                } else {
+                  acc.push({
+                    id: userId,
+                    isResearch: transcript.isResearchSession,
+                    consultations: 1,
+                    totalCost: transcript.tokenMetrics?.totalCost || 0,
+                    totalMessages: transcript.messages?.filter(m => m.type === 'user').length || 0
+                  });
+                }
+                return acc;
+              }, [])
+              .filter(user => 
+                searchTerm === '' || 
+                user.id.toLowerCase().includes(searchTerm.toLowerCase())
+              )
+              .map((user) => (
+                <tr key={user.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {user.id}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {user.isResearch ? 'Research' : 'Pilot'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {user.consultations}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    ${user.totalCost.toFixed(4)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {user.totalMessages}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Consultation Costs Table - Now with export button */}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <h3 className="text-lg font-semibold text-primary">Consultation Costs</h3>
+          <button
+            onClick={exportConsultations}
+            className="flex items-center space-x-2 px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export to Excel</span>
+          </button>
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -353,80 +670,6 @@ export default function CostsManager() {
             </button>
           </div>
         )}
-      </div>
-
-      {/* User Summary Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <h3 className="px-6 py-4 text-lg font-semibold text-primary border-b border-gray-200">
-          User Summary
-        </h3>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  User/Research ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Consultations
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Total Cost
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Total Messages
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {transcripts.reduce((acc, transcript) => {
-                const userId = transcript.isResearchSession ? transcript.anonymousId : transcript.userId;
-                const existingUser = acc.find(u => u.id === userId);
-                
-                if (existingUser) {
-                  existingUser.consultations += 1;
-                  existingUser.totalCost += transcript.tokenMetrics?.totalCost || 0;
-                  existingUser.totalMessages += transcript.messages?.filter(m => m.type === 'user').length || 0;
-                } else {
-                  acc.push({
-                    id: userId,
-                    isResearch: transcript.isResearchSession,
-                    consultations: 1,
-                    totalCost: transcript.tokenMetrics?.totalCost || 0,
-                    totalMessages: transcript.messages?.filter(m => m.type === 'user').length || 0
-                  });
-                }
-                return acc;
-              }, [])
-              .filter(user => 
-                searchTerm === '' || 
-                user.id.toLowerCase().includes(searchTerm.toLowerCase())
-              )
-              .map((user) => (
-                <tr key={user.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.id}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.isResearch ? 'Research' : 'Pilot'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.consultations}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${user.totalCost.toFixed(4)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.totalMessages}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );

@@ -263,7 +263,7 @@ export default function ConsentForm() {
             <p className="mt-2">
               This data will be analysed using realist evaluation methodology to understand how AI-VPs support
               learning. The findings will be used in Dr Narain's thesis and may be published in academic journals or
-              presented at conferences. All published data will be fully anonymized.
+              presented at conferences. All published data will be fully anonymised.
             </p>
             <p className="mt-2">
               Data may be retained for use in future research studies, subject to appropriate ethical approval.
@@ -277,7 +277,7 @@ export default function ConsentForm() {
               <li>Consultation transcript data will be stored as PDFs in password-protected Keele OneDrive cloud storage</li>
               <li>Interview recordings and transcripts will be stored in password-protected folders</li>
               <li>Access will be restricted to the research team</li>
-              <li>Data will be pseudonymized using unique identifiers</li>
+              <li>Data will be pseudonymised using unique identifiers</li>
               <li>All data will be retained securely for at least 5 years</li>
               <li>Data will be disposed of or stored in a repository for future research in guidance with accepted practice according to Keele University</li>
               <li>In publications, you will not be identifiable</li>
@@ -339,7 +339,7 @@ export default function ConsentForm() {
               onChange={(e) => setConsents(prev => ({...prev, readInfo: e.target.checked}))}
               className="mt-1 h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"
             />
-            <span className="ml-2">I confirm that I have read and understood the information sheet dated November 2024 (version 1.1) for the above study and have had the opportunity to ask questions</span>
+            <span className="ml-2">I confirm that I have read and understood the information for the above study and have had the opportunity to ask questions</span>
           </label>
 
           <label className="flex items-start">
@@ -349,7 +349,7 @@ export default function ConsentForm() {
               onChange={(e) => setConsents(prev => ({...prev, voluntary: e.target.checked}))}
               className="mt-1 h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"
             />
-            <span className="ml-2">I understand that my participation is voluntary and that I am free to withdraw at any time until my data is anonymized. In the event of withdrawal before anonymization, my interview data will be withdrawn.</span>
+            <span className="ml-2">I understand that my participation is voluntary and that I am free to withdraw at any time until my data is anonymised. In the event of withdrawal before anonymisation, my interview data will be withdrawn.</span>
           </label>
 
           <label className="flex items-start">
@@ -379,7 +379,7 @@ export default function ConsentForm() {
               onChange={(e) => setConsents(prev => ({...prev, dataStorage: e.target.checked}))}
               className="mt-1 h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"
             />
-            <span className="ml-2">I understand that my data will be stored securely and pseudonymized</span>
+            <span className="ml-2">I understand that my data will be stored securely and pseudonymised</span>
           </label>
 
           <label className="flex items-start">
@@ -389,7 +389,7 @@ export default function ConsentForm() {
               onChange={(e) => setConsents(prev => ({...prev, futureResearch: e.target.checked}))}
               className="mt-1 h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"
             />
-            <span className="ml-2">I agree for anonymized data to be used in future research projects subject to ethical approval</span>
+            <span className="ml-2">I agree for anonymised data to be used in future research projects subject to ethical approval</span>
           </label>
 
           <label className="flex items-start">

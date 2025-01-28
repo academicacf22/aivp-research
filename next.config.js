@@ -7,6 +7,18 @@ const nextConfig = {
         'undici': require.resolve('undici')
       };
     }
+
+    config.experiments = {
+      ...config.experiments,
+      asyncWebAssembly: true,
+      layers: true,
+    };
+
+    config.module.rules.push({
+      test: /\.wasm$/,
+      type: 'webassembly/async',
+    });
+
     return config;
   },
   async headers() {

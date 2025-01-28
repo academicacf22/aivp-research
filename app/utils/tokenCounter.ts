@@ -6,7 +6,12 @@ interface TokenMetrics {
   totalTokens: number | null;
   totalCost: number | null;
   model: string;
-  error?: string;
+  error?: string | null;
+}
+
+interface Message {
+  type: 'user' | 'ai';
+  content: string;
 }
 
 const COST_PER_1K_TOKENS = {
@@ -24,7 +29,10 @@ const COST_PER_1K_TOKENS = {
   }
 };
 
-export const calculateTokensAndCost = async (messages, model = 'gpt-3.5-turbo') => {
+export const calculateTokensAndCost = async (
+  messages: Message[], 
+  model: string = 'gpt-3.5-turbo'
+): Promise<TokenMetrics> => {
   try {
     // Check if there are any user messages before making API call
     const hasUserMessages = messages.some(msg => msg.type === 'user');
@@ -63,7 +71,7 @@ export const calculateTokensAndCost = async (messages, model = 'gpt-3.5-turbo') 
       totalTokens: null,
       totalCost: null,
       model,
-      error: error.message
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 }; 
